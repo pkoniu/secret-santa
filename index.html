@@ -136,6 +136,10 @@
       <div class="card">
         <h2>Gotowe! Roześlij kody</h2>
         <p class="hint" style="margin-top:-6px">Wyniki są zaszyfrowane — Ty też ich nie widzisz. Wyślij każdemu jego kod; wpisuje go w zakładce „Mam kod”.</p>
+        <div id="famBox" class="ok hidden" style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+          <div style="min-width:0"><b>Link dla rodziny</b><div class="code" id="famLink" style="color:var(--green)"></div></div>
+          <button class="btn small green" id="famCopy">Kopiuj link</button>
+        </div>
         <ul class="list" id="codeList" style="margin-top:12px"></ul>
         <button class="btn ghost full" id="copyAll">Kopiuj wszystkie kody (lista)</button>
         <button class="btn ghost full" id="again1" style="margin-top:8px">↺ Nowe losowanie</button>
@@ -331,6 +335,12 @@
     $('codeList').querySelectorAll('button').forEach(btn => btn.onclick = () => {
       copy(codes[people[+btn.dataset.i]], btn, 'Skopiowano ✓');
     });
+    if (/github\.io$/.test(location.hostname)) {
+      const fam = new URL('kod/', location.href.split('#')[0].split('?')[0].replace(/[^/]*$/,'')).href;
+      $('famLink').textContent = fam;
+      $('famCopy').onclick = e => copy(fam, e.currentTarget, 'Skopiowano ✓');
+      $('famBox').classList.remove('hidden');
+    }
     $('resCodes').classList.remove('hidden');
   }
   async function copy(text, btn, label){
