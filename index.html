@@ -135,9 +135,7 @@
     <div id="resCodes" class="hidden">
       <div class="card">
         <h2>Gotowe! Roześlij kody</h2>
-        <p class="hint" style="margin-top:-6px">Wyniki są zaszyfrowane — Ty też ich nie widzisz. Każdy wkleja swój kod w zakładce „Mam kod”.</p>
-        <label for="link">Link do tej strony (doda się do wiadomości)</label>
-        <input id="link" placeholder="wklej link do strony, którą udostępniasz">
+        <p class="hint" style="margin-top:-6px">Wyniki są zaszyfrowane — Ty też ich nie widzisz. Wyślij każdemu jego kod; wpisuje go w zakładce „Mam kod”.</p>
         <ul class="list" id="codeList" style="margin-top:12px"></ul>
         <button class="btn ghost full" id="copyAll">Kopiuj wszystkie kody (lista)</button>
         <button class="btn ghost full" id="again1" style="margin-top:8px">↺ Nowe losowanie</button>
@@ -180,7 +178,7 @@
   <section id="viewCode" class="hidden">
     <div class="card" id="codeEntry">
       <h2>Wklej swój kod</h2>
-      <textarea id="codeIn" rows="3" placeholder="SS1-…"></textarea>
+      <input id="codeIn" placeholder="np. 4K7Q-M3XA-2B" autocomplete="off" autocapitalize="characters" spellcheck="false" style="font-family:ui-monospace,Menlo,monospace;font-size:1.1rem;letter-spacing:1px">
       <button class="btn full" id="revealBtn">Pokaż, kogo wylosowałem/am</button>
       <div id="codeErr" class="err hidden">Ten kod nie wygląda poprawnie. Skopiuj go w całości.</div>
     </div>
@@ -210,7 +208,7 @@
   let pairs = null;   // {giver: recipient}
   let seen = new Set();
 
-  ['ev','budget','date','link'].forEach(id => {
+  ['ev','budget','date'].forEach(id => {
     const v = store.get('ss_'+id); if (v) $(id).value = v;
     $(id).addEventListener('input', () => store.set('ss_'+id, $(id).value));
   });
@@ -284,25 +282,26 @@
   }
 
   // ---- codes (obfuscated so the organizer doesn't see results by accident)
-  const KEY = new TextEncoder().encode('sekretny-mikolaj-2026');
-  function b64u(bytes){ let s=''; bytes.forEach(b=>s+=String.fromCharCode(b)); return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
-  function unb64u(str){ str=str.replace(/-/g,'+').replace(/_/g,'/'); while(str.length%4) str+='='; const s=atob(str); return Uint8Array.from(s, c=>c.charCodeAt(0)); }
-  function encode(obj){
-    const salt = new Uint8Array(2); crypto.getRandomValues(salt);
-    const data = new TextEncoder().encode(JSON.stringify(obj));
-    const out = new Uint8Array(data.length+2); out.set(salt,0);
-    data.forEach((b,i)=> out[i+2] = b ^ KEY[i%KEY.length] ^ salt[i%2]);
-    return 'SS1-' + b64u(out);
+  // Code = only the recipient's name: [salt][name ^ keystream][checksum], Crockford base32, groups of 4.
+  const ALPH = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+  function stream(seed, n){ let s=(seed*2654435761 ^ 0x5EC2E7)>>>0; const o=[]; for(let i=0;i<n;i++){ s^=s<<13; s>>>=0; s^=s>>>17; s^=s<<5; s>>>=0; o.push(s&255); } return o; }
+  function sum(bytes){ return bytes.reduce((a,b)=>(a*31+b)&255, 7); }
+  function toB32(bytes){ let bits=0,val=0,out=''; for(const b of bytes){ val=(val<<8)|b; bits+=8; while(bits>=5){ out+=ALPH[(val>>>(bits-5))&31]; bits-=5; } val&=(1<<bits)-1; } if(bits) out+=ALPH[(val<<(5-bits))&31]; return out; }
+  function fromB32(str){ let bits=0,val=0; const out=[]; for(const ch of str){ const v=ALPH.indexOf(ch); if(v<0) return null; val=(val<<5)|v; bits+=5; if(bits>=8){ out.push((val>>>(bits-8))&255); bits-=8; } val&=(1<<bits)-1; } return out; }
+  function encode(name){
+    const salt = rnd(256), data = [...new TextEncoder().encode(name)], ks = stream(salt, data.length);
+    const enc = data.map((b,i)=>b^ks[i]);
+    const s = toB32([salt, ...enc, sum([salt, ...data])]);
+    return s.match(/.{1,4}/g).join('-');
   }
   function decode(code){
-    const m = code.trim().replace(/\s+/g,'').match(/SS1-([A-Za-z0-9_-]+)/);
-    if (!m) return null;
-    try{
-      const raw = unb64u(m[1]); const salt = raw.slice(0,2);
-      const data = raw.slice(2).map((b,i)=> b ^ KEY[i%KEY.length] ^ salt[i%2]);
-      const o = JSON.parse(new TextDecoder().decode(data));
-      return (o && o.g && o.r) ? o : null;
-    }catch(e){ return null; }
+    const clean = code.toUpperCase().replace(/[^0-9A-Z]/g,'').replace(/[IL]/g,'1').replace(/O/g,'0');
+    if (clean.length < 4) return null;
+    const raw = fromB32(clean); if (!raw || raw.length < 3) return null;
+    const salt = raw[0], enc = raw.slice(1,-1), ks = stream(salt, enc.length);
+    const data = enc.map((b,i)=>b^ks[i]);
+    if (sum([salt, ...data]) !== raw[raw.length-1]) return null;
+    try{ return new TextDecoder('utf-8',{fatal:true}).decode(new Uint8Array(data)); }catch(e){ return null; }
   }
 
   function metaLine(){
@@ -324,22 +323,15 @@
 
   let codes = {};
   function showCodes(){
-    const ev=$('ev').value.trim(), b=$('budget').value.trim(), d=$('date').value.trim();
     codes = {};
-    people.forEach(g => codes[g] = encode({e:ev,g,r:pairs[g],b,d}));
+    people.forEach(g => codes[g] = encode(pairs[g]));
     $('codeList').innerHTML = people.map((g,i)=>`
-      <li><div style="min-width:0"><div class="name">${esc(g)}</div><div class="code">${codes[g].slice(0,22)}…</div></div>
-      <button class="btn small" data-i="${i}">Kopiuj wiadomość</button></li>`).join('');
+      <li><div style="min-width:0"><div class="name">${esc(g)}</div><div class="code" style="font-size:.9rem">${codes[g]}</div></div>
+      <button class="btn small" data-i="${i}">Kopiuj kod</button></li>`).join('');
     $('codeList').querySelectorAll('button').forEach(btn => btn.onclick = () => {
-      const g = people[+btn.dataset.i];
-      copy(message(g), btn, 'Skopiowano ✓');
+      copy(codes[people[+btn.dataset.i]], btn, 'Skopiowano ✓');
     });
     $('resCodes').classList.remove('hidden');
-  }
-  function message(g){
-    const ev = $('ev').value.trim(), link = $('link').value.trim();
-    return `🎅 Cześć ${g}! ${ev ? 'Secret Santa: '+ev+'. ' : ''}Twój tajny kod:\n\n${codes[g]}\n\n`
-      + (link ? `Otwórz ${link}, wybierz „Mam kod” i wklej go.` : `Wybierz „Mam kod” na stronie losowania i wklej go.`);
   }
   async function copy(text, btn, label){
     try{
@@ -388,15 +380,16 @@
 
   // ---- code entry
   $('revealBtn').onclick = () => {
-    const o = decode($('codeIn').value);
-    $('codeErr').classList.toggle('hidden', !!o);
-    if (!o) return;
-    $('crEvent').textContent = o.e || '';
-    $('crHello').textContent = `${o.g}, kupujesz prezent dla:`;
-    $('crWho').textContent = o.r;
-    $('crMeta').textContent = [o.b&&('Budżet: '+o.b), o.d&&('Wymiana: '+o.d)].filter(Boolean).join(' · ');
+    const r = decode($('codeIn').value);
+    $('codeErr').classList.toggle('hidden', !!r);
+    if (!r) return;
+    $('crEvent').textContent = '';
+    $('crHello').textContent = 'Kupujesz prezent dla:';
+    $('crWho').textContent = r;
+    $('crMeta').textContent = '';
     $('codeEntry').classList.add('hidden'); $('codeReveal').classList.remove('hidden');
   };
+  $('codeIn').addEventListener('keydown', e => { if (e.key==='Enter') $('revealBtn').click(); });
   $('crHide').onclick = () => { $('codeReveal').classList.add('hidden'); $('codeEntry').classList.remove('hidden'); $('codeIn').value=''; };
 
   render();
